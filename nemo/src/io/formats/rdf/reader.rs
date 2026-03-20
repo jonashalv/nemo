@@ -102,7 +102,14 @@ impl RdfReader {
 
     /// Create [AnyDataValue] from a [Literal].
     fn datavalue_from_literal(value: Literal) -> Result<AnyDataValue, DataValueCreationError> {
-        let (value, datatype, language) = value.destruct();
+        let (value, datatype, language, direction) = value.destruct();
+
+        if let (Some(language), Some(direction)) = (&language, direction) {
+            return Err(DataValueCreationError::InvalidLexicalValue {
+                lexical_value: format!("{value}@{language}--{direction}"),
+                datatype_iri: oxrdf::vocab::rdf::DIR_LANG_STRING.to_string(),
+            });
+        }
 
         if let Some(datatype) = datatype {
             AnyDataValue::new_from_typed_literal(value, datatype.into_string())
@@ -143,6 +150,7 @@ impl RdfReader {
             Term::NamedNode(nn) => Ok(Self::datavalue_from_named_node(nn)),
             Term::BlankNode(bn) => Ok(Self::datavalue_from_blank_node(bnode_map, tuple_writer, bn)),
             Term::Literal(lit) => Ok(Self::datavalue_from_literal(lit)?),
+            Term::Triple(_) => Err(RdfFormatError::RdfStarUnsupported),
         }
     }
 

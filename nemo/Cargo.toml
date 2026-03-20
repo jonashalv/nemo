@@ -48,10 +48,10 @@ strum_macros = { workspace = true }
 similar-string = "1.4.3"
 bytecount = "0.6.8"
 colored = { workspace = true }
-spargebra = { version = "0.4.6" }
+spargebra = { version = "0.4.6", features = ["sparql-12"] }
 urlencoding = { workspace = true }
-oxrdfio = "0.2.4"
-oxrdf = "0.3.3"
+oxrdfio = { version = "0.2.4", features = ["rdf-12"] }
+oxrdf = { version = "0.3.3", features = ["rdf-12"] }
 delegate = { workspace = true }
 orx-imp-vec = "2.14"
 itertools = { workspace = true }
@@ -62,4 +62,3 @@ env_logger = { workspace = true }
 assert_fs = { workspace = true }
 test-log = { workspace = true }
 tokio = { workspace = true, features = [ "rt", "macros" ] }
-

@@ -219,24 +219,17 @@ fn variables_in_pattern(pattern: &GraphPattern) -> PatternVariables {
             let mut seen_variables = HashSet::new();
 
             for pattern in patterns {
-                if let TermPattern::Variable(subject) = &pattern.subject
-                    && !seen_variables.contains(subject)
-                {
-                    variables.push(subject.clone());
-                    seen_variables.insert(subject.clone());
-                }
-                if let NamedNodePattern::Variable(predicate) = &pattern.predicate
-                    && !seen_variables.contains(predicate)
-                {
-                    variables.push(predicate.clone());
-                    seen_variables.insert(predicate.clone());
-                }
-                if let TermPattern::Variable(object) = &pattern.object
-                    && !seen_variables.contains(object)
-                {
-                    variables.push(object.clone());
-                    seen_variables.insert(object.clone());
-                }
+                append_variables_in_term_pattern(
+                    &pattern.subject,
+                    &mut variables,
+                    &mut seen_variables,
+                );
+                append_variable_if_new(&pattern.predicate, &mut variables, &mut seen_variables);
+                append_variables_in_term_pattern(
+                    &pattern.object,
+                    &mut variables,
+                    &mut seen_variables,
+                );
             }
 
             PatternVariables::new(variables, empty())
@@ -247,14 +240,9 @@ fn variables_in_pattern(pattern: &GraphPattern) -> PatternVariables {
             object,
         } => {
             let mut variables = Vec::new();
-
-            if let TermPattern::Variable(subject) = subject {
-                variables.push(subject.clone());
-            }
-            if let TermPattern::Variable(object) = object {
-                variables.push(object.clone());
-            }
-            variables.dedup();
+            let mut seen_variables = HashSet::new();
+            append_variables_in_term_pattern(subject, &mut variables, &mut seen_variables);
+            append_variables_in_term_pattern(object, &mut variables, &mut seen_variables);
 
             PatternVariables::new(variables, empty())
         }
@@ -347,7 +335,53 @@ fn rename_in_term_pattern(
         TermPattern::Variable(variable) => {
             TermPattern::Variable(mapping.get(variable).unwrap_or(variable).clone())
         }
+        TermPattern::Triple(triple) => {
+            TermPattern::Triple(Box::new(rename_in_triple_pattern(triple, mapping)))
+        }
         _ => term.clone(),
+    }
+}
+
+fn append_variable_if_new(
+    pattern: &NamedNodePattern,
+    variables: &mut Vec<Variable>,
+    seen_variables: &mut HashSet<Variable>,
+) {
+    if let NamedNodePattern::Variable(variable) = pattern
+        && seen_variables.insert(variable.clone())
+    {
+        variables.push(variable.clone());
+    }
+}
+
+fn append_variables_in_term_pattern(
+    pattern: &TermPattern,
+    variables: &mut Vec<Variable>,
+    seen_variables: &mut HashSet<Variable>,
+) {
+    match pattern {
+        TermPattern::Variable(variable) => {
+            if seen_variables.insert(variable.clone()) {
+                variables.push(variable.clone());
+            }
+        }
+        TermPattern::Triple(triple) => {
+            append_variables_in_term_pattern(&triple.subject, variables, seen_variables);
+            append_variable_if_new(&triple.predicate, variables, seen_variables);
+            append_variables_in_term_pattern(&triple.object, variables, seen_variables);
+        }
+        _ => {}
+    }
+}
+
+fn rename_in_triple_pattern(
+    triple: &TriplePattern,
+    mapping: &HashMap<Variable, Variable>,
+) -> TriplePattern {
+    TriplePattern {
+        subject: rename_in_term_pattern(&triple.subject, mapping),
+        predicate: rename_in_named_node_pattern(&triple.predicate, mapping),
+        object: rename_in_term_pattern(&triple.object, mapping),
     }
 }
 
@@ -472,11 +506,7 @@ fn rename_in_graph_pattern(
             let mut result = Vec::new();
 
             for pattern in patterns {
-                result.push(TriplePattern {
-                    subject: rename_in_term_pattern(&pattern.subject, mapping),
-                    predicate: rename_in_named_node_pattern(&pattern.predicate, mapping),
-                    object: rename_in_term_pattern(&pattern.object, mapping),
-                });
+                result.push(rename_in_triple_pattern(pattern, mapping));
             }
 
             GraphPattern::Bgp { patterns: result }
@@ -885,5 +915,81 @@ pub(crate) fn negate_query(query: &Query) -> Query {
             base_iri: base_iri.clone(),
         },
         _ => query.clone(),
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::collections::{HashMap, HashSet};
+
+    use oxrdf::NamedNode;
+    use spargebra::{SparqlParser, term::GroundTerm};
+
+    use super::{push_constants, variables_in_pattern};
+
+    #[test]
+    fn collects_variables_from_nested_triple_terms() {
+        let query = SparqlParser::new()
+            .parse_query(
+                "
+                PREFIX : <http://example.com/>
+                SELECT ?statement ?subject ?predicate ?object
+                WHERE {
+                    ?statement :reifies << ?subject ?predicate ?object >> .
+                }",
+            )
+            .expect("query with triple terms should parse");
+
+        let pattern = match query {
+            spargebra::Query::Select { pattern, .. } => pattern,
+            _ => unreachable!("test query is SELECT"),
+        };
+        let variables = variables_in_pattern(&pattern);
+
+        assert_eq!(
+            variables.in_scope,
+            HashSet::from([
+                spargebra::term::Variable::new_unchecked("statement"),
+                spargebra::term::Variable::new_unchecked("subject"),
+                spargebra::term::Variable::new_unchecked("predicate"),
+                spargebra::term::Variable::new_unchecked("object"),
+            ])
+        );
+    }
+
+    #[test]
+    fn pushes_constants_into_nested_triple_terms() {
+        let query = SparqlParser::new()
+            .parse_query(
+                "
+                PREFIX : <http://example.com/>
+                SELECT ?statement ?subject ?object
+                WHERE {
+                    ?statement :reifies << ?subject :knows ?object >> .
+                }",
+            )
+            .expect("query with triple terms should parse");
+
+        let rewritten = push_constants(
+            &query,
+            &HashMap::from([(
+                1,
+                GroundTerm::NamedNode(NamedNode::new_unchecked("http://example.com/alice")),
+            )]),
+        );
+
+        let spargebra::Query::Select { ref pattern, .. } = rewritten else {
+            unreachable!("test query is SELECT");
+        };
+
+        let variables = variables_in_pattern(&pattern);
+        assert!(
+            !variables
+                .in_scope
+                .contains(&spargebra::term::Variable::new_unchecked("subject"))
+        );
+        let rewritten_query = rewritten.to_string();
+        assert!(rewritten_query.contains("<http://example.com/alice>"));
+        assert!(rewritten_query.contains("VALUES"));
     }
 }

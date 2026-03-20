@@ -303,6 +303,18 @@ mod test {
         let result = query_param.is_value_valid(valid_query);
         assert!(result.is_ok());
 
+        let reified_query = AnyDataValue::new_plain_string(String::from(
+            "
+            PREFIX : <http://example.com/>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+            SELECT ?statement
+            WHERE {
+                ?statement rdf:reifies << :alice :knows :bob >> .
+            }",
+        ));
+        let result = query_param.is_value_valid(reified_query);
+        assert!(result.is_ok());
+
         // Invalid because no prefixes are specified
         let invalid_query = AnyDataValue::new_plain_string(String::from("
             SELECT ?item ?itemLabel
