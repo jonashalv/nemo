@@ -105,6 +105,8 @@ impl RdfReader {
         let (value, datatype, language, direction) = value.destruct();
 
         if let (Some(language), Some(direction)) = (&language, direction) {
+            // Nemo's data values model language-tagged strings but not RDF 1.2 directional
+            // language-tagged strings, so reject them explicitly during RDF import.
             return Err(DataValueCreationError::InvalidLexicalValue {
                 lexical_value: format!("{value}@{language}--{direction}"),
                 datatype_iri: oxrdf::vocab::rdf::DIR_LANG_STRING.to_string(),
